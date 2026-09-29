@@ -1,55 +1,88 @@
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, send_file
 from src.detector import detect_vehicles
+from src.video_detector import detect_video
 from src.traffic.signal_control import get_signal_status
+
 from PIL import Image
+from werkzeug.utils import secure_filename
+
 import io
+import os
 import base64
+import uuid
+
+
+# ==========================================================
+# Flask App
+# ==========================================================
 
 app = Flask(__name__)
 
 
-# --------------------------------------------------
+# ==========================================================
+# Folders
+# ==========================================================
+
+UPLOAD_FOLDER = "data/videos"
+RESULT_FOLDER = "results"
+
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(RESULT_FOLDER, exist_ok=True)
+
+
+# ==========================================================
 # Home Page
-# --------------------------------------------------
+# ==========================================================
 
 @app.route("/")
 def home():
     return render_template("index.html")
 
 
-# --------------------------------------------------
-# Analyze Image
-# --------------------------------------------------
+# ==========================================================
+# IMAGE ANALYSIS
+# ==========================================================
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
-    uploaded_image = request.files["image"]
+    uploaded_image = request.files.get("image")
 
-    # Open uploaded image
+    if not uploaded_image:
+        return "No image uploaded.", 400
+
+    # ------------------------------------------------------
+    # Open image
+    # ------------------------------------------------------
+
     image = Image.open(uploaded_image).convert("RGB")
 
-    # Run YOLO detection
+    # ------------------------------------------------------
+    # YOLO detection
+    # ------------------------------------------------------
+
     results = detect_vehicles(image)
 
-    # Get first result
     result = results[0]
 
+    # ------------------------------------------------------
     # Get detected class names
+    # ------------------------------------------------------
+
     detected_classes = [
         result.names[int(cls)]
         for cls in result.boxes.cls
     ]
 
-    # --------------------------------------------------
-    # Total Detection Count
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Total detections
+    # ------------------------------------------------------
 
     vehicle_count = len(detected_classes)
 
-    # --------------------------------------------------
-    # Emergency Vehicle Classes
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Emergency vehicle classes
+    # ------------------------------------------------------
 
     ambulance_classes = {
         "ambulance",
@@ -57,7 +90,7 @@ def analyze():
         "ambulance_SOL"
     }
 
-    fire_truck_classes = {
+    fire_classes = {
         "fire_truck",
         "fireladder"
     }
@@ -66,9 +99,9 @@ def analyze():
         "police"
     }
 
-    # --------------------------------------------------
-    # Count Emergency Vehicles
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Emergency counts
+    # ------------------------------------------------------
 
     ambulance_count = sum(
         cls in ambulance_classes
@@ -76,7 +109,7 @@ def analyze():
     )
 
     fire_truck_count = sum(
-        cls in fire_truck_classes
+        cls in fire_classes
         for cls in detected_classes
     )
 
@@ -85,62 +118,31 @@ def analyze():
         for cls in detected_classes
     )
 
-    # --------------------------------------------------
-    # Total Emergency Vehicles
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Emergency detection
+    # ------------------------------------------------------
 
-    emergency_count = (
-        ambulance_count
-        + fire_truck_count
-        + police_count
+    emergency_detected = (
+        ambulance_count > 0
+        or fire_truck_count > 0
+        or police_count > 0
     )
 
-    # --------------------------------------------------
-    # Traffic Signal Control
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Traffic signal status
+    # ------------------------------------------------------
 
-    signal_data = get_signal_status(emergency_count)
+    signal_status = get_signal_status(
+        1 if emergency_detected else 0
+    )
 
-    signal_mode = signal_data["mode"]
-    signal_status = signal_data["signal"]
-    signal_message = signal_data["message"]
-    signal_description = signal_data["status"]
-
-    # --------------------------------------------------
-    # Emergency Alert
-    # --------------------------------------------------
-
-    if emergency_count > 0:
-
-        emergency_status = "🚨 EMERGENCY VEHICLE DETECTED"
-
-        emergency_message = (
-            "Traffic signal priority should be given."
-        )
-
-        emergency_class = "emergency"
-
-    else:
-
-        emergency_status = "✅ NO EMERGENCY VEHICLE"
-
-        emergency_message = (
-            "Normal traffic signal operation."
-        )
-
-        emergency_class = "normal"
-
-    # --------------------------------------------------
-    # Draw YOLO Detection Boxes
-    # --------------------------------------------------
+    # ------------------------------------------------------
+    # Draw YOLO boxes
+    # ------------------------------------------------------
 
     result_image = results[0].plot()
 
     result_image = Image.fromarray(result_image)
-
-    # --------------------------------------------------
-    # Convert Image to Browser Format
-    # --------------------------------------------------
 
     buffer = io.BytesIO()
 
@@ -153,347 +155,633 @@ def analyze():
         buffer.getvalue()
     ).decode("utf-8")
 
-    # --------------------------------------------------
-    # Result Dashboard
-    # --------------------------------------------------
+    # ======================================================
+    # IMAGE RESULT PAGE
+    # ======================================================
+
+    if emergency_detected:
+
+        emergency_box = """
+        <div class="emergency active">
+            🚨 EMERGENCY VEHICLE DETECTED
+            <span>Traffic signal priority should be given.</span>
+        </div>
+        """
+
+    else:
+
+        emergency_box = """
+        <div class="emergency normal">
+            ✅ NO EMERGENCY VEHICLE
+            <span>Normal traffic signal operation.</span>
+        </div>
+        """
+
+    signal = signal_status.get(
+        "signal",
+        "RED"
+    )
+
+    mode = signal_status.get(
+        "mode",
+        "NORMAL TRAFFIC"
+    )
+
+    message = signal_status.get(
+        "message",
+        "Normal traffic operation."
+    )
+
+    status = signal_status.get(
+        "status",
+        ""
+    )
 
     return f"""
-<!DOCTYPE html>
+    <!DOCTYPE html>
 
-<html lang="en">
+    <html>
 
-<head>
+    <head>
 
-    <meta charset="UTF-8">
+        <title>Traffic Detection Result</title>
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+        <style>
 
-    <title>Smart Traffic Management System</title>
+            body {{
+                margin: 0;
+                background: #0f172a;
+                color: white;
+                font-family: Arial, sans-serif;
+                text-align: center;
+            }}
 
-    <style>
+            .container {{
+                width: 90%;
+                max-width: 1000px;
+                margin: 40px auto;
+            }}
 
-        body {{
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #0f172a;
-            color: white;
-            text-align: center;
-        }}
+            h1 {{
+                font-size: 42px;
+                margin-bottom: 35px;
+            }}
 
-        .container {{
-            width: 90%;
-            max-width: 1200px;
-            margin: 40px auto;
-        }}
+            .cards {{
+                display: grid;
+                grid-template-columns:
+                    repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin-bottom: 35px;
+            }}
 
-        h1 {{
-            font-size: 36px;
-            margin-bottom: 30px;
-        }}
+            .card {{
+                background: #1e293b;
+                padding: 25px;
+                border-radius: 18px;
+            }}
 
-        /* ------------------------------------------
-           Statistics Cards
-        ------------------------------------------ */
+            .card h2 {{
+                color: #cbd5e1;
+                font-size: 20px;
+            }}
 
-        .stats {{
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            flex-wrap: wrap;
-            margin-bottom: 30px;
-        }}
+            .number {{
+                font-size: 45px;
+                font-weight: bold;
+                color: #38bdf8;
+            }}
 
-        .card {{
-            background: #1e293b;
-            padding: 20px;
-            border-radius: 15px;
-            width: 180px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-        }}
+            .emergency {{
+                padding: 30px;
+                border-radius: 18px;
+                font-size: 30px;
+                font-weight: bold;
+                margin: 30px 0;
+            }}
 
-        .card h2 {{
-            font-size: 32px;
-            margin: 10px 0;
-            color: #38bdf8;
-        }}
+            .emergency span {{
+                display: block;
+                font-size: 18px;
+                margin-top: 12px;
+            }}
 
-        .card p {{
-            margin: 0;
-            color: #cbd5e1;
-            font-size: 16px;
-        }}
+            .active {{
+                background: #7f1d1d;
+                border: 3px solid #ef4444;
+            }}
 
-        /* ------------------------------------------
-           Emergency Alert
-        ------------------------------------------ */
+            .normal {{
+                background: #14532d;
+                border: 3px solid #22c55e;
+            }}
 
-        .alert {{
-            padding: 22px;
-            border-radius: 15px;
-            margin: 25px auto 30px;
-            max-width: 800px;
-        }}
+            .signal {{
+                background: #1e293b;
+                padding: 35px;
+                border-radius: 20px;
+                margin-bottom: 35px;
+            }}
 
-        .emergency {{
-            background: #7f1d1d;
-            border: 2px solid #ef4444;
-        }}
+            .signal h2 {{
+                font-size: 30px;
+            }}
 
-        .normal {{
-            background: #14532d;
-            border: 2px solid #22c55e;
-        }}
+            .green {{
+                color: #22c55e;
+                font-size: 55px;
+                font-weight: bold;
+            }}
 
-        .alert h2 {{
-            margin: 5px 0 10px;
-            font-size: 24px;
-        }}
+            .red {{
+                color: #ef4444;
+                font-size: 55px;
+                font-weight: bold;
+            }}
 
-        .alert p {{
-            margin: 0;
-            color: #e2e8f0;
-            font-size: 16px;
-        }}
+            .result {{
+                background: #1e293b;
+                padding: 30px;
+                border-radius: 20px;
+            }}
 
-        /* ------------------------------------------
-           Traffic Signal
-        ------------------------------------------ */
+            .result img {{
+                max-width: 90%;
+                border-radius: 15px;
+            }}
 
-        .signal-box {{
-            background: #1e293b;
-            padding: 25px;
-            border-radius: 15px;
-            margin: 25px auto 30px;
-            max-width: 800px;
-        }}
+            .back {{
+                display: inline-block;
+                margin-top: 30px;
+                padding: 15px 30px;
+                background: #38bdf8;
+                color: #0f172a;
+                text-decoration: none;
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 18px;
+            }}
 
-        .signal-box h2 {{
-            margin-bottom: 20px;
-        }}
+        </style>
 
-        .signal {{
-            font-size: 48px;
-            font-weight: bold;
-            margin: 15px;
-        }}
+    </head>
 
-        .green {{
-            color: #22c55e;
-        }}
+    <body>
 
-        .red {{
-            color: #ef4444;
-        }}
+        <div class="container">
 
-        .signal-mode {{
-            font-size: 20px;
-            font-weight: bold;
-            margin: 10px;
-        }}
+            <h1>🚦 Smart Traffic Management System</h1>
 
-        .signal-message {{
-            color: #cbd5e1;
-            font-size: 16px;
-        }}
+            <div class="cards">
 
-        /* ------------------------------------------
-           AI Detection Output
-        ------------------------------------------ */
+                <div class="card">
+                    <h2>Total Detected</h2>
+                    <div class="number">
+                        {vehicle_count}
+                    </div>
+                </div>
 
-        .result-box {{
-            background: #1e293b;
-            padding: 25px;
-            border-radius: 15px;
-        }}
+                <div class="card">
+                    <h2>🚑 Ambulance</h2>
+                    <div class="number">
+                        {ambulance_count}
+                    </div>
+                </div>
 
-        .result-box img {{
-            max-width: 90%;
-            border-radius: 12px;
-        }}
+                <div class="card">
+                    <h2>🚒 Fire Truck</h2>
+                    <div class="number">
+                        {fire_truck_count}
+                    </div>
+                </div>
 
-        /* ------------------------------------------
-           Back Button
-        ------------------------------------------ */
+                <div class="card">
+                    <h2>🚓 Police</h2>
+                    <div class="number">
+                        {police_count}
+                    </div>
+                </div>
 
-        .back-button {{
-            display: inline-block;
-            margin-top: 25px;
-            padding: 12px 25px;
-            background: #38bdf8;
-            color: #0f172a;
-            text-decoration: none;
-            border-radius: 8px;
-            font-weight: bold;
-        }}
+            </div>
 
-        .back-button:hover {{
-            background: #7dd3fc;
-        }}
+            {emergency_box}
 
-    </style>
+            <div class="signal">
 
-</head>
+                <h2>🚦 TRAFFIC SIGNAL STATUS</h2>
 
+                <div class="{
+                    'green' if signal == 'GREEN'
+                    else 'red'
+                }">
 
-<body>
+                    ● {signal}
 
-<div class="container">
+                </div>
 
-    <h1>
-        🚦 Smart Traffic Management System
-    </h1>
+                <h2>{mode}</h2>
 
+                <p>{message}</p>
 
-    <!-- ------------------------------------------
-         Detection Statistics
-    ------------------------------------------- -->
+                <p>{status}</p>
 
-    <div class="stats">
+            </div>
 
-        <div class="card">
+            <div class="result">
 
-            <p>Total Detected</p>
+                <h2>🤖 AI Detection Output</h2>
 
-            <h2>
-                {vehicle_count}
-            </h2>
+                <img
+                    src="data:image/jpeg;base64,{image_base64}"
+                    alt="Detection Result"
+                >
 
-        </div>
+            </div>
 
-
-        <div class="card">
-
-            <p>🚑 Ambulance</p>
-
-            <h2>
-                {ambulance_count}
-            </h2>
+            <a class="back" href="/">
+                ← Analyze Another File
+            </a>
 
         </div>
 
+    </body>
 
-        <div class="card">
+    </html>
+    """
 
-            <p>🚒 Fire Truck</p>
 
-            <h2>
-                {fire_truck_count}
-            </h2>
+# ==========================================================
+# VIDEO ANALYSIS
+# ==========================================================
+
+@app.route("/analyze_video", methods=["POST"])
+def analyze_video():
+
+    uploaded_video = request.files.get("video")
+
+    if not uploaded_video:
+        return "No video uploaded.", 400
+
+    if uploaded_video.filename == "":
+        return "No video selected.", 400
+
+    # ------------------------------------------------------
+    # Generate unique filenames
+    # ------------------------------------------------------
+
+    unique_id = uuid.uuid4().hex[:8]
+
+    original_name = secure_filename(
+        uploaded_video.filename
+    )
+
+    input_path = os.path.join(
+        UPLOAD_FOLDER,
+        f"{unique_id}_{original_name}"
+    )
+
+    output_path = os.path.join(
+        RESULT_FOLDER,
+        f"video_detected_{unique_id}.mp4"
+    )
+
+    # ------------------------------------------------------
+    # Save uploaded video
+    # ------------------------------------------------------
+
+    uploaded_video.save(input_path)
+
+    # ------------------------------------------------------
+    # Run video detection
+    # ------------------------------------------------------
+
+    result = detect_video(
+        input_path,
+        output_path
+    )
+
+    # ------------------------------------------------------
+    # Get results
+    # ------------------------------------------------------
+
+    total_frames = result.get(
+        "total_frames",
+        0
+    )
+
+    emergency_detected = result.get(
+        "emergency_detected",
+        False
+    )
+
+    ambulance_count = result.get(
+        "ambulance_detections",
+        0
+    )
+
+    fire_truck_count = result.get(
+        "fire_truck_detections",
+        0
+    )
+
+    police_count = result.get(
+        "police_detections",
+        0
+    )
+
+    # ------------------------------------------------------
+    # Traffic signal
+    # ------------------------------------------------------
+
+    signal_status = get_signal_status(
+        1 if emergency_detected else 0
+    )
+
+    signal = signal_status.get(
+        "signal",
+        "RED"
+    )
+
+    mode = signal_status.get(
+        "mode",
+        "NORMAL TRAFFIC"
+    )
+
+    message = signal_status.get(
+        "message",
+        "Normal traffic operation."
+    )
+
+    status = signal_status.get(
+        "status",
+        ""
+    )
+
+    # ------------------------------------------------------
+    # Emergency box
+    # ------------------------------------------------------
+
+    if emergency_detected:
+
+        emergency_box = """
+        <div class="emergency active">
+            🚨 EMERGENCY VEHICLE DETECTED
+            <span>Traffic signal priority should be given.</span>
+        </div>
+        """
+
+    else:
+
+        emergency_box = """
+        <div class="emergency normal">
+            ✅ NO EMERGENCY VEHICLE
+            <span>Normal traffic signal operation.</span>
+        </div>
+        """
+
+    # ======================================================
+    # VIDEO RESULT PAGE
+    # ======================================================
+
+    return f"""
+    <!DOCTYPE html>
+
+    <html>
+
+    <head>
+
+        <title>Video Detection Result</title>
+
+        <style>
+
+            body {{
+                margin: 0;
+                background: #0f172a;
+                color: white;
+                font-family: Arial, sans-serif;
+                text-align: center;
+            }}
+
+            .container {{
+                width: 90%;
+                max-width: 1100px;
+                margin: 40px auto;
+            }}
+
+            h1 {{
+                font-size: 42px;
+            }}
+
+            .cards {{
+                display: grid;
+                grid-template-columns:
+                    repeat(auto-fit, minmax(200px, 1fr));
+                gap: 20px;
+                margin: 35px 0;
+            }}
+
+            .card {{
+                background: #1e293b;
+                padding: 25px;
+                border-radius: 18px;
+            }}
+
+            .card h2 {{
+                color: #cbd5e1;
+                font-size: 20px;
+            }}
+
+            .number {{
+                font-size: 45px;
+                font-weight: bold;
+                color: #38bdf8;
+            }}
+
+            .emergency {{
+                padding: 30px;
+                border-radius: 18px;
+                font-size: 30px;
+                font-weight: bold;
+                margin: 30px 0;
+            }}
+
+            .emergency span {{
+                display: block;
+                font-size: 18px;
+                margin-top: 12px;
+            }}
+
+            .active {{
+                background: #7f1d1d;
+                border: 3px solid #ef4444;
+            }}
+
+            .normal {{
+                background: #14532d;
+                border: 3px solid #22c55e;
+            }}
+
+            .signal {{
+                background: #1e293b;
+                padding: 35px;
+                border-radius: 20px;
+                margin: 30px 0;
+            }}
+
+            .green {{
+                color: #22c55e;
+                font-size: 55px;
+                font-weight: bold;
+            }}
+
+            .red {{
+                color: #ef4444;
+                font-size: 55px;
+                font-weight: bold;
+            }}
+
+            video {{
+                width: 90%;
+                max-width: 900px;
+                border-radius: 15px;
+                margin-top: 20px;
+            }}
+
+            .back {{
+                display: inline-block;
+                margin-top: 30px;
+                padding: 15px 30px;
+                background: #38bdf8;
+                color: #0f172a;
+                text-decoration: none;
+                border-radius: 10px;
+                font-weight: bold;
+                font-size: 18px;
+            }}
+
+        </style>
+
+    </head>
+
+    <body>
+
+        <div class="container">
+
+            <h1>🎥 Video Detection Result</h1>
+
+            <div class="cards">
+
+                <div class="card">
+                    <h2>🎞️ Total Frames</h2>
+                    <div class="number">
+                        {total_frames}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🚑 Ambulance</h2>
+                    <div class="number">
+                        {ambulance_count}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🚒 Fire Truck</h2>
+                    <div class="number">
+                        {fire_truck_count}
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>🚓 Police</h2>
+                    <div class="number">
+                        {police_count}
+                    </div>
+                </div>
+
+            </div>
+
+            {emergency_box}
+
+            <div class="signal">
+
+                <h2>🚦 TRAFFIC SIGNAL STATUS</h2>
+
+                <div class="{
+                    'green' if signal == 'GREEN'
+                    else 'red'
+                }">
+
+                    ● {signal}
+
+                </div>
+
+                <h2>{mode}</h2>
+
+                <p>{message}</p>
+
+                <p>{status}</p>
+
+            </div>
+
+            <div>
+
+                <h2>🤖 AI Video Detection Output</h2>
+
+                <video controls>
+
+                    <source
+                        src="/video_result/{os.path.basename(output_path)}"
+                        type="video/mp4"
+                    >
+
+                    Your browser does not support video playback.
+
+                </video>
+
+            </div>
+
+            <br>
+
+            <a class="back" href="/">
+                ← Analyze Another File
+            </a>
 
         </div>
 
+    </body>
 
-        <div class="card">
-
-            <p>🚓 Police</p>
-
-            <h2>
-                {police_count}
-            </h2>
-
-        </div>
-
-    </div>
+    </html>
+    """
 
 
-    <!-- ------------------------------------------
-         Emergency Alert
-    ------------------------------------------- -->
+# ==========================================================
+# SERVE PROCESSED VIDEO
+# ==========================================================
 
-    <div class="alert {emergency_class}">
+@app.route("/video_result/<filename>")
+def video_result(filename):
 
-        <h2>
-            {emergency_status}
-        </h2>
+    file_path = os.path.join(
+        RESULT_FOLDER,
+        filename
+    )
 
-        <p>
-            {emergency_message}
-        </p>
+    if not os.path.exists(file_path):
+        return "Video result not found.", 404
 
-    </div>
-
-
-    <!-- ------------------------------------------
-         Traffic Signal Status
-    ------------------------------------------- -->
-
-    <div class="signal-box">
-
-        <h2>
-            🚦 TRAFFIC SIGNAL STATUS
-        </h2>
-
-        <div class="signal
-            {'green' if signal_status == 'GREEN' else 'red'}">
-
-            {'🟢' if signal_status == 'GREEN' else '🔴'}
-
-            {signal_status}
-
-        </div>
-
-        <div class="signal-mode">
-
-            {signal_mode}
-
-        </div>
-
-        <p class="signal-message">
-
-            {signal_message}
-
-        </p>
-
-        <p class="signal-message">
-
-            {signal_description}
-
-        </p>
-
-    </div>
+    return send_file(
+        file_path,
+        mimetype="video/mp4"
+    )
 
 
-    <!-- ------------------------------------------
-         AI Detection Output
-    ------------------------------------------- -->
-
-    <div class="result-box">
-
-        <h2>
-            🤖 AI Detection Output
-        </h2>
-
-        <img
-            src="data:image/jpeg;base64,{image_base64}"
-            alt="Detection Result"
-        >
-
-    </div>
-
-
-    <!-- ------------------------------------------
-         Back Button
-    ------------------------------------------- -->
-
-    <a href="/" class="back-button">
-
-        ← Analyze Another Image
-
-    </a>
-
-</div>
-
-</body>
-
-</html>
-"""
-
-
-# --------------------------------------------------
+# ==========================================================
 # Run Flask
-# --------------------------------------------------
+# ==========================================================
 
 if __name__ == "__main__":
 
-    app.run(debug=True)
+    app.run(
+        debug=True
+    )
