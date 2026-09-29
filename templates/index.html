@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Smart Traffic Management System</title>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #0f172a;
+            color: white;
+            text-align: center;
+        }
+
+        .container {
+            width: 80%;
+            margin: 60px auto;
+        }
+
+        h1 {
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+
+        p {
+            color: #cbd5e1;
+        }
+
+        .upload-box {
+            margin-top: 40px;
+            padding: 40px;
+            border: 2px dashed #38bdf8;
+            border-radius: 15px;
+            background: #1e293b;
+        }
+
+        input {
+            margin: 20px;
+            padding: 10px;
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 8px;
+            background: #38bdf8;
+            color: #0f172a;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #7dd3fc;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>🚦 Smart Traffic Management System</h1>
+
+        <p>AI-Based Vehicle and Emergency Vehicle Detection</p>
+
+        <div class="upload-box">
+
+            <h2>Upload Traffic Image</h2>
+
+            <form action="/analyze" method="POST" enctype="multipart/form-data">
+
+                <input type="file" name="image" accept="image/*" required>
+
+                <br>
+
+                <button type="submit">
+                    🔍 Analyze Image
+                </button>
+
+            </form>
+
+        </div>
+
+    </div>
+
+</body>
+</html>
